@@ -204,8 +204,8 @@ int esp32s3_bringup(void)
     {
       syslog(LOG_ERR, "ERROR: Failed to initialize LCD.\n");
     }
-    struct lcd_dev_s *dev = board_lcd_getdev(0);
-    if (dev == NULL)
+  struct lcd_dev_s *dev = board_lcd_getdev(0);
+  if (dev == NULL)
     {
       syslog(LOG_ERR, "ERROR: Failed to get LCD device.\n");
     }
