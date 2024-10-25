@@ -41,9 +41,11 @@
 #define GPIO_LCD_RST        16
 #define GPIO_LCD_BL         48
 
-/* BOOT Button */
+/* Button pins definitions */
 
 #define BUTTON_BOOT  0
+#define BUTTON_UP 11
+#define BUTTON_DOWN 26
 
 
 /****************************************************************************
