@@ -39,3 +39,4 @@ endif()
 if(CONFIG_STEPPER_DRV8825)
   target_sources(drivers PRIVATE drv8825.c)
 endif()
+
