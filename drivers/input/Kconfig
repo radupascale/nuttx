@@ -76,22 +76,22 @@ config DRV2605L_I2C_FREQUENCY
 
 config DRV2605L_EN_PIN
 	int "DRV2605L Enable Pin"
-	default 17
+	default -1
 
 config DRV2605L_IN_TRIG_PIN
 	int "DRV2605L Input/Trigger Pin"
-	default 16
+	default -1
 
 choice
 	prompt "DRV2605L Actuator"
 	default LRA_ACTUATOR
 
-config LRA_ACTUATOR
+config DRV2605L_LRA_ACTUATOR
 	bool "LRA Actuator"
 	---help---
 		The actuator connected to the out +/- pins of the driver is LRA.
 
-config ERM_ACTUATOR
+config DRV2605L_ERM_ACTUATOR
 	bool "ERM Actuator"
 	---help---
 		The actuator connected to the out +/- pins of the driver is ERM.
@@ -102,11 +102,11 @@ choice
 	prompt "DRV2605L Mode"
 	default CLOSED_LOOP_UNIDIR_MODE
 
-config CLOSED_LOOP_UNIDIR_MODE
+config DRV2605L_CLOSED_LOOP_UNIDIR_MODE
 	bool "Closed Loop Unidirectional Mode"
 	---help---
 
-config CLOSED_LOOP_BIDIR_MODE
+config DRV2605L_CLOSED_LOOP_BIDIR_MODE
 	bool "Closed Loop Bidirectional Mode"
 	---help---
 
@@ -124,27 +124,27 @@ config EMPTY
 	bool "No ROM library used"
 	---help---
 
-config TS2200_LIBRARY_A
+config DRV2605L_TS2200_LIBRARY_A
 	bool "TS2200_LIBRARY_A"
 	depends on ERM_ACTUATOR
 
-config TS2200_LIBRARY_B
+config DRV2605L_TS2200_LIBRARY_B
 	bool "TS2200_LIBRARY_B"
 	depends on ERM_ACTUATOR
 
-config TS2200_LIBRARY_C
+config DRV2605L_TS2200_LIBRARY_C
 	bool "TS2200_LIBRARY_C"
 	depends on ERM_ACTUATOR
 
-config TS2200_LIBRARY_D
+config DRV2605L_TS2200_LIBRARY_D
 	bool "TS2200_LIBRARY_D"
 	depends on ERM_ACTUATOR
 
-config TS2200_LIBRARY_E
+config DRV2605L_TS2200_LIBRARY_E
 	bool "TS2200_LIBRARY_E"
 	depends on LRA_ACTUATOR
 
-config TS2200_LIBRARY_F
+config DRV2605L_TS2200_LIBRARY_F
 	bool "TS2200_LIBRARY_F"
 	depends on ERM_ACTUATOR
 

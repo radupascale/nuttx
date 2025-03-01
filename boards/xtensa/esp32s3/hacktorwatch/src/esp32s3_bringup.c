@@ -342,6 +342,14 @@ int esp32s3_bringup(void)
 
 #endif
 
+#ifdef CONFIG_FF_DRV2605L
+  ret = board_drv2605l_initialize(0, 0);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: Failed to register DRV2605L.\n");
+    }
+#endif /* CONFIG_FF_DRV2605L */
+
   /* If we got here then perhaps not all initialization was successful, but
    * at least enough succeeded to bring-up NSH with perhaps reduced
    * capabilities.

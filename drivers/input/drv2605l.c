@@ -207,12 +207,12 @@ struct drv2605l_calib_s
   uint8_t auto_cal_time;
   uint8_t drive_time;
 
-#ifdef LRA_ACTUATOR
+#ifdef CONFIG_DRV2605L_LRA_ACTUATOR
   uint8_t sample_time;
   uint8_t blanking_time;
   uint8_t idiss_time;
   uint8_t zc_det_time;
-#endif
+#endif /* CONFIG_DRV2605L_LRA_ACTUATOR */
 
   /* Output */
 
@@ -232,6 +232,9 @@ struct drv2605l_dev_s
 
   int en_pin;
   int int_pin;
+#ifndef CONFIG_DRV2605L_NO_LIBRARY
+  uint8_t lib_effect_duration; /* rise + brake time (ms) */
+#endif /* !CONFIG_DRV2605L_NO_LIBRARY */
 
   uint16_t max_effects;
   mutex_t dev_lock;
@@ -388,12 +391,157 @@ static int drv2605l_checkid(FAR struct drv2605l_dev_s *priv)
   return OK;
 }
 
+static void drv2605l_save_rtp_effect(FAR struct drv2605l_dev_s *priv,
+                                     FAR struct ff_effect *effect)
+{
+  struct drv2605l_effect_s *rtp_effect;
+  int16_t level = effect->u.constant.level;
+  uint8_t regval = 0;
+  float percent = 0;
+
+  rtp_effect = &priv->effects[effect->id];
+  rtp_effect->type = DRV2605L_RTP_EFFECT;
+  rtp_effect->delay = effect->replay.delay;
+  rtp_effect->length = effect->replay.length;
+
+#ifdef CONFIG_DRV2605L_OPEN_LOOP_MODE
+  /* In Open Loop, negative drive values are allowed
+   * (meaning counter-clockwise rotation for ERM,
+   *   or 180-degree phase shift for LRA)
+   * So, negative magnitudes map to negative drive [-100%, 0%]
+   * and positive magnitudes map to positive drive [0%, 100%]
+   */
+
+  percent = level * 1.f / INT16_MAX;
+  percent *= 0.5;
+  percent += 0.5;
+#endif /* CONFIG_DRV2605L_OPEN_LOOP_MODE */
+
+#ifdef CONFIG_DRV2605L_CLOSED_LOOP_UNIDIR_MODE
+  /* In Closed Loop Unidir Mode, negative drive values
+   * are not allowed. 0% drive would mean Full Braking,
+   * and is not recommended. 50% means 1/2 Rated Voltage,
+   * 100% is Rated Voltage magnitude.
+   * So, the absolute value of the magnitude is used.
+   */
+
+  percent = ABS(level) * 1.f / INT16_MAX;
+  percent = MAX(percent, 0.1); /* Ensure at least 10% to avoid Full Braking */
+#endif /* CONFIG_DRV2605L_CLOSED_LOOP_UNIDIR_MODE */
+
+#ifdef CONFIG_DRV2605L_CLOSED_LOOP_BIDIR_MODE
+  /* In Closed Loop Bidir Mode, negative drive values
+   * are not allowed. [0%, 50%) drive would mean Full Braking,
+   * 75% means 1/2 Rated Voltage,
+   * 100% is Rated Voltage magnitude.
+   * So, the absolute value of the magnitude is used and the
+   * percent is scaled to fit in [50%, 100%]
+   */
+
+  percent = ABS(level) * 1.f / INT16_MAX;
+  percent *= 0.5;
+  percent += 0.5;
+#endif /* CONFIG_DRV2605L_CLOSED_LOOP_BIDIR_MODE */
+
+  iinfo("percent: %f\n", percent);
+
+  /* Scale level to fit in 8-bits and consider RTP_DATA_FORMAT */
+
+  regval = drv2605l_getreg8(priv, DRV2605L_CTRL3_REG_ADDR);
+
+  if (regval & DRV2605L_DATA_FORMAT_RTP_MSK)
+    {
+      rtp_effect->v.rtp_data = (0xff * percent);
+      iinfo("RTP Unsigned value: 0x%x\n", rtp_effect->v.rtp_data);
+    }
+  else
+    {
+      rtp_effect->v.rtp_data = (0xff * percent) - 0x80;
+      iinfo("RTP Signed value: 0x%x\n", rtp_effect->v.rtp_data);
+    }
+}
+
+static void drv2605l_save_rom_effect(FAR struct drv2605l_dev_s *priv,
+                                     FAR struct ff_effect *effect)
+{
+  struct drv2605l_effect_s *rom_effect;
+  uint8_t data_len = MIN(effect->u.periodic.custom_len, 16);
+  uint16_t data = 0;
+  uint8_t i = 0;
+
+  rom_effect = &priv->effects[effect->id];
+  rom_effect->type = DRV2605L_ROM_EFFECT;
+  rom_effect->delay = effect->replay.delay;
+
+  /**
+   *  Expected custom_data field:
+   *  [effect_id, wait_time,  ...., wait_time, effect_id, wait_time]
+   *  with a maximum of 8 non-zero fields
+   *  (wait_time = 0 => not written to any registers)
+   *  Maximum custom_len is 16 (8 pairs of wait time and id)
+   */
+
+  for (i = 0; i < data_len; i++)
+    {
+      data = effect->u.periodic.custom_data[i];
+
+      if (data)
+        {
+          if (i & 1)
+            {
+              /* Convert ms to register data:
+               * WAV_FRM_SEQ[6:0] * 10ms = wait time
+               */
+
+              rom_effect->v.wav_frm_seq[i] = data / 10;
+              rom_effect->v.wav_frm_seq[i] |= (1 << 7);
+              rom_effect->length += data;
+            }
+          else
+            {
+              /* Library effect index: [1, 123] */
+
+              rom_effect->v.wav_frm_seq[i] = MIN(data, 123);
+              rom_effect->length += priv->lib_effect_duration;
+            }
+        }
+    }
+
+  /* To stop the waveform playback */
+
+  if (data_len < 8)
+    {
+      rom_effect->v.wav_frm_seq[data_len] = 0;
+    }
+}
+
 static int drv2605l_haptic_upload_effect(FAR struct ff_lowerhalf_s *lower,
                                          FAR struct ff_effect *effect,
                                          FAR struct ff_effect *old)
 {
-  iinfo("called: effect_id = %d \n", effect->id);
-  return OK;
+  FAR struct drv2605l_dev_s *priv;
+
+  iinfo("effect_id = %d \n", effect->id);
+
+  priv = container_of(lower, FAR struct drv2605l_dev_s, lower);
+
+  if (effect->type == FF_CONSTANT)
+    {
+      drv2605l_save_rtp_effect(priv, effect);
+      return OK;
+    }
+
+  if (effect->type == FF_PERIODIC)
+    {
+      if (effect->u.periodic.waveform == FF_CUSTOM)
+        {
+#ifndef CONFIG_DRV2605L_NO_LIBRARY
+          drv2605l_save_rom_effect(priv, effect);
+#else
+          ierr("Cannot use FF_CUSTOM when no library is selected\n");
+#endif /* !CONFIG_DRV2605L_NO_LIBRARY */
+        }
+    }
 }
 
 static int drv2605l_haptic_playback(struct ff_lowerhalf_s *lower,
@@ -410,13 +558,143 @@ static int drv2605l_haptic_erase(FAR struct ff_lowerhalf_s *lower,
   return OK;
 }
 
-static void drv2605l_haptic_set_gain(FAR struct ff_lowerhalf_s *lower,
-                                      uint16_t gain)
+static float drv2605l_get_vbat(FAR struct drv2605l_dev_s *priv)
 {
   iinfo("called: gain = %d\n", gain);
 }
 
-static int drv2605l_pin_init(FAR struct drv2605l_dev_s *priv)
+static void drv2605l_standby_work_routine(FAR void *arg)
+{
+  uint8_t regval = 0;
+  FAR struct drv2605l_dev_s *priv = (FAR struct drv2605l_dev_s *)arg;
+
+  /* In case of waveform playing, check the GO bit */
+
+  regval = drv2605l_getreg8(priv, DRV2605L_GO_REG_ADDR);
+
+  if (regval)
+    {
+      wd_start(&priv->wd_timer, MSEC2TICK(150),
+            drv2605l_timer_func, (wdparm_t)priv);
+      return;
+    }
+
+  /* Enter standby */
+
+  drv2605l_putreg8(priv, DRV2605L_MODE_REG_ADDR, DEVICE_STANDBY);
+  nxmutex_unlock(&priv->dev_lock);
+}
+
+static void drv2605l_timer_func(wdparm_t arg)
+{
+  FAR struct drv2605l_dev_s *priv = (FAR struct drv2605l_dev_s *)arg;
+
+  work_queue(HPWORK, &priv->haptic_work,
+             drv2605l_standby_work_routine, priv, 0);
+}
+
+static void drv2605l_rom_work_routine(FAR void *arg)
+{
+  FAR struct drv2605l_dev_s *priv = (FAR struct drv2605l_dev_s *)arg;
+  FAR struct drv2605l_effect_s *effect = priv->current_effect;
+  uint8_t i = 0;
+
+  for (i = 0; i < 8; i++)
+    {
+      drv2605l_putreg8(priv, DRV2605L_WAV_FRM_SEQ_BASE_REG_ADDR + i,
+                      effect->v.wav_frm_seq[i]);
+
+      if (!effect->v.wav_frm_seq[i])
+        {
+          break;
+        }
+    }
+
+  /* Play effects: MODE = Internal Trigger + Remove from standby */
+
+  drv2605l_putreg8(priv, DRV2605L_MODE_REG_ADDR, DEVICE_READY);
+  drv2605l_putreg8(priv, DRV2605L_GO_REG_ADDR, 0x01);
+
+  /* Check periodically on the GO bit and then put the driver in standby */
+
+  wd_start(&priv->wd_timer, MSEC2TICK(effect->length),
+          drv2605l_timer_func, (wdparm_t)priv);
+}
+
+static void drv2605l_rtp_work_routine(FAR void *arg)
+{
+  FAR struct drv2605l_dev_s *priv = (FAR struct drv2605l_dev_s *)arg;
+  FAR struct drv2605l_effect_s *effect = priv->current_effect;
+
+  drv2605l_putreg8(priv, DRV2605L_RTP_INPUT_REG_ADDR,
+                   effect->v.rtp_data);
+
+  drv2605l_putreg8(priv, DRV2605L_MODE_REG_ADDR, MODE_RTP);
+
+  wd_start(&priv->wd_timer, MSEC2TICK(effect->length),
+          drv2605l_timer_func, (wdparm_t)priv);
+}
+
+static void drv2605l_play_current_effect(FAR struct drv2605l_dev_s *priv)
+{
+  FAR struct drv2605l_effect_s *effect;
+  sclock_t time_us;
+
+  time_us = wd_gettime(&priv->wd_timer);
+  usleep(time_us);
+
+  if (!priv->current_effect)
+    {
+      ierr("No effect selected!\n");
+      return;
+    }
+
+  nxmutex_lock(&priv->dev_lock);
+  effect = priv->current_effect;
+
+  if (effect->type == DRV2605L_RTP_EFFECT)
+    {
+      work_queue(HPWORK, &priv->haptic_work,
+                  drv2605l_rtp_work_routine, priv,
+                  MSEC2TICK(effect->delay));
+    }
+
+  if (effect->type == DRV2605L_ROM_EFFECT)
+    {
+      work_queue(HPWORK, &priv->haptic_work,
+                  drv2605l_rom_work_routine, priv,
+                  MSEC2TICK(effect->delay));
+    }
+}
+
+static int drv2605l_haptic_playback(struct ff_lowerhalf_s *lower,
+                                    int effect_id, int val)
+{
+  FAR struct drv2605l_dev_s *priv;
+
+  iinfo("effect_id = %d val = %d\n", effect_id, val);
+
+  priv = container_of(lower, FAR struct drv2605l_dev_s, lower);
+  priv->current_effect = &priv->effects[effect_id];
+
+  if (val == FF_EVENT_START)
+    {
+      drv2605l_play_current_effect(priv);
+      return OK;
+    }
+
+  if (val == FF_EVENT_STOP)
+    {
+      nxmutex_unlock(&priv->dev_lock);
+      work_cancel(HPWORK, &priv->haptic_work);
+      return OK;
+    }
+
+  ierr("Unsupported event value!\n");
+  return OK;
+}
+
+static int drv2605l_set_loop_mode(FAR struct drv2605l_dev_s *priv)
 {
   int ret = 0;
 
@@ -427,13 +705,42 @@ static int drv2605l_pin_init(FAR struct drv2605l_dev_s *priv)
       return -EIO;
     }
 
-  ret = IOEXP_SETDIRECTION(priv->ioedev, priv->int_pin, IOEXPANDER_DIRECTION_OUT);
-  if (ret < 0)
-    {
-      ierr("ioexpander set direction error: %d\n", ret);
-      return -EIO;
-    }
-  
+#ifdef CONFIG_DRV2605L_OPEN_LOOP_MODE
+#ifdef CONFIG_DRV2605L_LRA_ACTUATOR
+  regval |= 1;
+#else
+  regval |= (1 << 5);
+#endif /* LRA_ACTUATOR */
+#else
+#ifdef CONFIG_DRV2605L_LRA_ACTUATOR
+  regval &= ~1;
+#else
+  regval &= ~(1 << 5);
+#endif /* LRA_ACTUATOR */
+#endif /* OPEN_LOOP_MODE */
+
+  ret = drv2605l_putreg8(priv, DRV2605L_CTRL3_REG_ADDR, regval);
+
+  regval = drv2605l_getreg8(priv, DRV2605L_CTRL2_REG_ADDR);
+
+#ifdef CONFIG_DRV2605L_CLOSED_LOOP_UNIDIR_MODE
+  regval &= ~(1 << 7);
+#else
+  regval |= (1 << 7);
+#endif /* CONFIG_DRV2605L_CLOSED_LOOP_UNIDIR_MODE */
+
+  ret = drv2605l_putreg8(priv, DRV2605L_CTRL2_REG_ADDR, regval);
+
+#ifdef CONFIG_DRV2605L_CLOSED_LOOP_UNIDIR_MODE
+  /* Set DATA_FORMAT_RTP = 1 */
+
+  regval = drv2605l_getreg8(priv, DRV2605L_CTRL3_REG_ADDR);
+  regval |= DRV2605L_DATA_FORMAT_RTP_MSK;
+
+  ret = drv2605l_putreg8(priv, DRV2605L_CTRL3_REG_ADDR, regval);
+#endif /* CONFIG_DRV2605L_CLOSED_LOOP_UNIDIR_MODE */
+
+  nxmutex_unlock(&priv->dev_lock);
   return ret;
 }
 
@@ -444,7 +751,44 @@ static int drv2605l_enable(FAR struct drv2605l_dev_s *priv, bool en)
 
   priv->enabled = en;
 
-  /* Set / Unset enable pin */
+#ifdef CONFIG_DRV2605L_TS2200_LIBRARY_A
+  regval |= 1;
+  priv->lib_effect_duration = 100;
+#endif /* CONFIG_DRV2605L_TS2200_LIBRARY_A */
+
+#ifdef CONFIG_DRV2605L_TS2200_LIBRARY_B
+  regval |= 2;
+  priv->lib_effect_duration = 75;
+#endif /* CONFIG_DRV2605L_TS2200_LIBRARY_B */
+
+#ifdef CONFIG_DRV2605L_TS2200_LIBRARY_C
+  regval |= 3;
+  priv->lib_effect_duration = 100;
+#endif /* CONFIG_DRV2605L_TS2200_LIBRARY_C */
+
+#ifdef CONFIG_DRV2605L_TS2200_LIBRARY_D
+  regval |= 4;
+  priv->lib_effect_duration = 165;
+#endif /* CONFIG_DRV2605L_TS2200_LIBRARY_D */
+
+#ifdef CONFIG_DRV2605L_TS2200_LIBRARY_E
+  regval |= 5;
+  priv->lib_effect_duration = 180;
+#endif /* CONFIG_DRV2605L_TS2200_LIBRARY_E */
+
+#ifdef CONFIG_DRV2605L_TS2200_LIBRARY_F
+  regval |= 7;
+  priv->lib_effect_duration = 65;
+#endif /* CONFIG_DRV2605L_TS2200_LIBRARY_F */
+
+#ifdef CONFIG_DRV2605L_LRA_LIBRARY
+  regval |= 6;
+  priv->lib_effect_duration = 100;
+#endif /* CONFIG_DRV2605L_LRA_LIBRARY */
+
+  ret = drv2605l_putreg8(priv, DRV2605L_LIB_SEL_REG_ADDR, regval);
+
+  nxmutex_unlock(&priv->dev_lock);
 
   return ret;
 }
@@ -469,8 +813,34 @@ static int drv2605l_auto_calib(FAR struct drv2605l_dev_s *priv)
   calib_data = kmm_malloc(sizeof(struct drv2605l_calib_s));
   if (calib_data == NULL)
     {
-      ierr("failed to allocate drv2605l_calib_s instance\n");
-      return -ENOMEM;
+      /* Populate with default params */
+
+      calib_data = kmm_zalloc(sizeof(struct drv2605l_calib_s));
+      if (calib_data == NULL)
+        {
+          ierr("failed to allocate drv2605l_calib_s instance\n");
+          return -ENOMEM;
+        }
+
+      calib_data->erm_lra = 0;
+
+#ifdef CONFIG_DRV2605L_LRA_ACTUATOR
+      calib_data->erm_lra = 1;
+#endif /* CONFIG_DRV2605L_LRA_ACTUATOR */
+
+      calib_data->fb_brake_factor = 3;
+      calib_data->loop_gain = 1;
+      calib_data->rated_voltage = 0x3e;
+      calib_data->od_clamp = 0x8c;
+      calib_data->auto_cal_time = 2;
+      calib_data->drive_time = 0x13;
+
+#ifdef CONFIG_DRV2605L_LRA_ACTUATOR
+      calib_data->sample_time = 3;
+      calib_data->blanking_time = 1;
+      calib_data->idiss_time = 1;
+      calib_data->zc_det_time = 0;
+#endif /* CONFIG_DRV2605L_LRA_ACTUATOR */
     }
 
   priv->calib = calib_data;
@@ -480,6 +850,45 @@ static int drv2605l_auto_calib(FAR struct drv2605l_dev_s *priv)
 
   /* Populate input to auto calibration */
 
+  regval = drv2605l_getreg8(priv, DRV2605L_FEEDBACK_CTRL_REG_ADDR);
+  regval &= DRV2605L_BEMF_GAIN_MSK;
+  regval |= (priv->calib->erm_lra << 7) |
+            (priv->calib->fb_brake_factor << 4) |
+            (priv->calib->loop_gain << 2);
+  drv2605l_putreg8(priv, DRV2605L_FEEDBACK_CTRL_REG_ADDR, regval);
+  drv2605l_putreg8(priv, DRV2605L_RATED_VOLTAGE_REG_ADDR,
+                   priv->calib->rated_voltage);
+  drv2605l_putreg8(priv, DRV2605L_OD_CLAMP_VOLTAGE_REG_ADDR,
+                   priv->calib->od_clamp);
+
+  regval = drv2605l_getreg8(priv, DRV2605L_CTRL1_REG_ADDR);
+  regval |= (priv->calib->drive_time & DRV2605L_DRIVE_TIME_MSK);
+
+  regval = drv2605l_getreg8(priv, DRV2605L_CTRL4_REG_ADDR);
+  regval |= (priv->calib->auto_cal_time & 0x3) << 4;
+
+#ifdef CONFIG_DRV2605L_LRA_ACTUATOR
+  regval |= priv->calib->zc_det_time << 6;
+#endif /* CONFIG_DRV2605L_LRA_ACTUATOR */
+
+  drv2605l_putreg8(priv, DRV2605L_CTRL4_REG_ADDR, regval);
+
+#ifdef CONFIG_DRV2605L_LRA_ACTUATOR
+  regval = drv2605l_getreg8(priv, DRV2605L_CTRL2_REG_ADDR);
+
+  regval |= (((priv->calib->sample_time & 0x3) << 4) |
+            ((priv->calib->blanking_time & 0x3) << 2) |
+            (priv->calib->idiss_time & 0x3)) & ~((1 << 6) | (1 << 7));
+
+  drv2605l_putreg8(priv, DRV2605L_CTRL2_REG_ADDR, regval);
+
+  regval = drv2605l_getreg8(priv, DRV2605L_CTRL5_REG_ADDR);
+  regval &= ~(0xf);
+  regval |= ((priv->calib->blanking_time & 0xc) |
+            ((priv->calib->idiss_time >> 2) 0x3));
+
+  drv2605l_putreg8(priv, DRV2605L_CTRL5_REG_ADDR, regval);
+#endif /* CONFIG_DRV2605L_LRA_ACTUATOR */
 
   /* Trigger auto calibration */
 
