@@ -43,7 +43,7 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-#define LCD_SPI_PORTNO ESP32S3_SPI3
+#define LCD_SPI_PORTNO ESP32S3_SPI2
 #define LCD_DC         GPIO_LCD_DC
 #define LCD_RST        GPIO_LCD_RST
 #define LCD_BL         GPIO_LCD_BL
