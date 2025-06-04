@@ -48,8 +48,24 @@
 #  include "esp32s3_board_wlan.h"
 #endif
 
+#ifdef CONFIG_ESPRESSIF_WIFI_BT_COEXIST
+#  include "esp32s3_wifi_adapter.h"
+#endif
+
 #ifdef CONFIG_ESP32S3_BLE
 #  include "esp32s3_ble.h"
+#endif
+
+#ifdef CONFIG_ESP32S3_RT_TIMER
+#  include "esp32s3_rt_timer.h"
+#endif
+
+#ifdef CONFIG_ESP32S3_I2C
+#  include "esp32s3_i2c.h"
+#endif
+
+#ifdef CONFIG_ESPRESSIF_I2S
+#  include "espressif/esp_i2s.h"
 #endif
 
 #ifdef CONFIG_WATCHDOG
@@ -58,6 +74,10 @@
 
 #ifdef CONFIG_INPUT_BUTTONS
 #  include <nuttx/input/buttons.h>
+#endif
+
+#ifdef CONFIG_ESP32S3_PARTITION_TABLE
+#  include "esp32s3_partition.h"
 #endif
 
 #ifdef CONFIG_ESP32S3_SPI
@@ -151,6 +171,25 @@ int esp32s3_bringup(void)
     }
 #endif
 
+#ifdef CONFIG_ESP32S3_RT_TIMER
+  ret = esp32s3_rt_timer_init();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "Failed to initialize RT timer: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_RTC_DRIVER
+  /* Instantiate the ESP32-S3 RTC driver */
+
+  ret = esp32s3_rtc_driverinit();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR,
+             "ERROR: Failed to Instantiate the RTC driver: %d\n", ret);
+    }
+#endif
+
 #ifdef CONFIG_WATCHDOG
   /* Configure watchdog timer */
 
@@ -158,6 +197,27 @@ int esp32s3_bringup(void)
   if (ret < 0)
     {
       syslog(LOG_ERR, "Failed to initialize watchdog timer: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_I2C_DRIVER
+  /* Configure I2C peripheral interfaces */
+
+  ret = board_i2c_init();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "Failed to initialize I2C driver: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_ESP32S3_TWAI
+
+  /* Initialize TWAI and register the TWAI driver. */
+
+  ret = esp32s3_twai_setup();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "ERROR: esp32s3_twai_setup failed: %d\n", ret);
     }
 #endif
 
@@ -171,9 +231,17 @@ int esp32s3_bringup(void)
     }
 #endif
 
-#ifdef CONFIG_ESP32S3_WIRELESS
+#ifdef CONFIG_ESPRESSIF_WIRELESS
 
-#ifdef CONFIG_ESP32S3_BLE
+#ifdef CONFIG_ESPRESSIF_WIFI_BT_COEXIST
+  ret = esp_wifi_bt_coexist_init();
+  if (ret)
+    {
+      syslog(LOG_ERR, "ERROR: Failed to initialize Wi-Fi and BT coexist\n");
+    }
+#endif
+
+#ifdef CONFIG_ESPRESSIF_BLE
   ret = esp32s3_ble_initialize();
   if (ret)
     {
@@ -181,15 +249,23 @@ int esp32s3_bringup(void)
     }
 #endif
 
-#ifdef CONFIG_ESP32S3_WIFI
+#ifdef CONFIG_ESPRESSIF_WLAN
   ret = board_wlan_init();
   if (ret < 0)
     {
-      syslog(LOG_ERR, "ERROR: Failed to initialize wireless subsystem=%d\n",
+      syslog(LOG_ERR, "ERROR: Failed to initialize wlan subsystem=%d\n",
              ret);
     }
 #endif
 
+#endif
+
+#if defined(CONFIG_DEV_GPIO) && !defined(CONFIG_GPIO_LOWER_HALF)
+  ret = esp32s3_gpio_init();
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "Failed to initialize GPIO Driver: %d\n", ret);
+    }
 #endif
 
 #ifdef CONFIG_VIDEO_FB
