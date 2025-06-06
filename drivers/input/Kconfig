@@ -573,7 +573,19 @@ config INPUT_CST816S
 	---help---
 		Enable support for CST816S Touch Controller.
 
+config ES32S3_CST816S_INT
+	bool "Hynitron CST816S Driver interrupt on esp32s3"
+	default n
+	depends on INPUT_CST816S
+	---help---
+		Enable support for interrupts on CST816S Touch Controller.
 
+config CST816S_INT_PIN
+	int "Interrupt GPIO for Hynitron CST816S Driver"
+	default 1
+	depends on ES32S3_CST816S_INT
+	---help---
+		Set the GPIO pin for the interrupt for CST816S Touch Controller.
 
 config INPUT_GT9XX
 	bool "Goodix GT9xx Driver"

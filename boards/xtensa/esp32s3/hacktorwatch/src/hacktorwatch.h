@@ -123,5 +123,9 @@ int board_spiflash_init(void);
 int board_i2c_init(void);
 #endif
 
+#ifdef CONFIG_INPUT_CST816S
+int board_touchscreen_init(void);
+#endif
+
 #endif /* __ASSEMBLY__ */
 #endif /* __BOARDS_XTENSA_ESP32S3_HACKTORWATCH_SRC_HACKTORWATCH_H */

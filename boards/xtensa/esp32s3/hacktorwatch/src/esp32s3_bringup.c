@@ -237,18 +237,10 @@ int esp32s3_bringup(void)
 #endif
 
 #ifdef CONFIG_INPUT_CST816S
-  /* Register the CST816S touch driver */
-
-    struct i2c_master_s *cst816s_i2c_bus = esp32s3_i2cbus_initialize(0);
-  if (!cst816s_i2c_bus)
-    {
-      _err("ERROR: Failed to get I2C%d interface\n", 0);
-    }
-
-  ret = cst816s_register("/dev/input0", cst816s_i2c_bus, CST816S_DEVICE_ADDRESS);
+  ret = board_touchscreen_init();
   if (ret < 0)
     {
-      syslog(LOG_ERR, "Failed to initialize CST816S touch driver: %d\n", ret);
+        syslog(LOG_ERR, "Failed to initialize CST816S touch driver: %d\n", ret);
     }
 #endif
 
