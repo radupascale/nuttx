@@ -1,0 +1,6 @@
+[submodule "cst816s"]
+	path = cst816s
+	url = https://github.com/lupyuen/cst816s-nuttx
+[submodule "drivers/input/cst816s"]
+	path = drivers/input/cst816s
+	url = https://github.com/lupyuen/cst816s-nuttx

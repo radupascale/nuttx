@@ -126,9 +126,14 @@ ifeq ($(CONFIG_INPUT_GOLDFISH_EVENTS),y)
   CSRCS += goldfish_events.c
 endif
 
+ifeq ($(CONFIG_INPUT_CST816S), y)
+  CSRCS += cst816s.c
+endif
+
 # Include input device driver build support
 
 DEPPATH += --dep-path input
 VPATH += :input
 CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)$(DELIM)drivers$(DELIM)input
 endif
+
