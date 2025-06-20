@@ -79,6 +79,12 @@
 #ifdef CONFIG_INPUT_CST816S
 #define CST816S_DEVICE_ADDRESS 0x15
 #  include <nuttx/input/cst816s.h>
+#  include "esp32s3_gpio.h"
+
+#ifndef CONFIG_ESP32S3_GPIO_IRQ
+#  error "The CST816S driver requires ESP32S3_GPIO_IRQ in the config"
+#endif
+
 #endif
 
 #ifdef CONFIG_ESP32S3_PARTITION_TABLE
@@ -116,6 +122,7 @@
  *     Called from the NSH library
  *
  ****************************************************************************/
+
 
 int esp32s3_bringup(void)
 {
@@ -236,21 +243,6 @@ int esp32s3_bringup(void)
     }
 #endif
 
-#ifdef CONFIG_INPUT_CST816S
-  /* Register the CST816S touch driver */
-
-    struct i2c_master_s *cst816s_i2c_bus = esp32s3_i2cbus_initialize(0);
-  if (!cst816s_i2c_bus)
-    {
-      _err("ERROR: Failed to get I2C%d interface\n", 0);
-    }
-
-  ret = cst816s_register("/dev/input0", cst816s_i2c_bus, CST816S_DEVICE_ADDRESS);
-  if (ret < 0)
-    {
-      syslog(LOG_ERR, "Failed to initialize CST816S touch driver: %d\n", ret);
-    }
-#endif
 
 #ifdef CONFIG_ESPRESSIF_WIRELESS
 
@@ -287,6 +279,30 @@ int esp32s3_bringup(void)
     {
       syslog(LOG_ERR, "Failed to initialize GPIO Driver: %d\n", ret);
     }
+#endif
+
+#ifdef CONFIG_INPUT_CST816S
+  /* Configure the interrupt */
+  esp32s3_configgpio(CST816S_INT, INPUT_PULLUP);
+  int irq = ESP32S3_PIN2IRQ(CST816S_INT);
+
+  /* Register the CST816S touch driver */
+
+    struct i2c_master_s *cst816s_i2c_bus = esp32s3_i2cbus_initialize(0);
+  if (!cst816s_i2c_bus)
+    {
+      _err("ERROR: Failed to get I2C%d interface\n", 0);
+    }
+
+  ret = cst816s_register("/dev/input0", cst816s_i2c_bus, CST816S_DEVICE_ADDRESS, irq);
+  if (ret < 0)
+    {
+      syslog(LOG_ERR, "Failed to initialize CST816S touch driver: %d\n", ret);
+    }
+
+  esp32s3_gpioirqenable(irq, FALLING);
+
+
 #endif
 
 #ifdef CONFIG_VIDEO_FB

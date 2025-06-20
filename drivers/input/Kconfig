@@ -573,7 +573,12 @@ config INPUT_CST816S
 	---help---
 		Enable support for CST816S Touch Controller.
 
-
+config CST816S_INT_PIN
+    int "CST816S interrupt GPIO pin number"
+    default 1
+    depends on INPUT_CST816S
+    ---help---
+        The GPIO pin number used for the CST816S interrupt line.
 
 config INPUT_GT9XX
 	bool "Goodix GT9xx Driver"

@@ -48,6 +48,10 @@
 /* Needs to be set HIGH for peripherals such as the display to work */
 #define EN_LDO2 18
 
+/* CST816S pins */
+#define CST816S_INT CONFIG_CST816S_INT_PIN
+#define CST816S_RST 2
+
 
 /****************************************************************************
  * Public Types
