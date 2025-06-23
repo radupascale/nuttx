@@ -85,6 +85,10 @@
 #  error "The CST816S driver requires ESP32S3_GPIO_IRQ in the config"
 #endif
 
+#ifdef CONFIG_SENSORS_LSM6DSL
+#include <nuttx/sensors/lsm6dsl.h>
+#endif
+
 #endif
 
 #ifdef CONFIG_ESP32S3_PARTITION_TABLE
@@ -281,20 +285,21 @@ int esp32s3_bringup(void)
     }
 #endif
 
+#ifdef CONFIG_ESP32S3_I2C0
+  struct i2c_master_s *i2c0 = esp32s3_i2cbus_initialize(0);
+  if (!i2c0)
+    {
+      _err("ERROR: Failed to get I2C%d interface\n", 0);
+    }
+#endif
+
 #ifdef CONFIG_INPUT_CST816S
   /* Configure the interrupt */
   esp32s3_configgpio(CST816S_INT, INPUT_PULLUP);
   int irq = ESP32S3_PIN2IRQ(CST816S_INT);
 
   /* Register the CST816S touch driver */
-
-    struct i2c_master_s *cst816s_i2c_bus = esp32s3_i2cbus_initialize(0);
-  if (!cst816s_i2c_bus)
-    {
-      _err("ERROR: Failed to get I2C%d interface\n", 0);
-    }
-
-  ret = cst816s_register("/dev/input0", cst816s_i2c_bus, CST816S_DEVICE_ADDRESS, irq);
+  ret = cst816s_register("/dev/input0", i2c0, CST816S_DEVICE_ADDRESS, irq);
   if (ret < 0)
     {
       syslog(LOG_ERR, "Failed to initialize CST816S touch driver: %d\n", ret);
@@ -302,7 +307,19 @@ int esp32s3_bringup(void)
 
   esp32s3_gpioirqenable(irq, FALLING);
 
+#endif
 
+
+#ifdef CONFIG_SENSORS_LSM6DSL
+  ret = lsm6dsl_sensor_register("/dev/lsm6dsl0", i2c0, LSM6DSLACCEL_ADDR0);
+  if (ret < 0)
+    {
+      syslog("ERROR: Failed to initialize LMS6DSL accelero-gyro driver %s\n",
+            "/dev/lsm6dsl0");
+      return -ENODEV;
+    }
+
+  syslog(LOG_ERR, "INFO: LMS6DSL sensor has been initialized successfully\n");
 #endif
 
 #ifdef CONFIG_VIDEO_FB
