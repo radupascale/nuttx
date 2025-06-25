@@ -96,6 +96,7 @@ endif
 
 ifeq ($(CONFIG_ESP32S3_LEDC),y)
 CSRCS += esp32s3_board_ledc.c
+endif
 
 ifeq ($(CONFIG_HAPTIC_DRV2605L),y)
   CSRCS += esp32s3_drv2605l.c

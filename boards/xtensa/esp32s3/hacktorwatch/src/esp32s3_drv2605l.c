@@ -1,5 +1,5 @@
 /****************************************************************************
- * boards/xtensa/esp32s3/common/src/esp32s3_drv2605l.c
+ * boards/xtensa/esp32s3/esp32s3-hacktorwatch/src/esp32s3_drv2605l.c
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -31,9 +31,12 @@
 
 #include <nuttx/arch.h>
 #include <nuttx/input/drv2605l.h>
+#include <nuttx/ioexpander/ioexpander.h>
 #include <nuttx/i2c/i2c_master.h>
 
+#include "esp32s3_gpio.h"
 #include "esp32s3_i2c.h"
+#include "hacktorwatch.h"
 
 /****************************************************************************
  * Public Functions
@@ -57,7 +60,6 @@
 
 int board_drv2605l_initialize(int devno, int busno)
 {
-  FAR struct ioexpander_dev_s *ioedev;
   FAR struct i2c_master_s *i2c;
   int ret;
 
@@ -65,18 +67,18 @@ int board_drv2605l_initialize(int devno, int busno)
 
   /* Initialize DRV2605L */
 
-  // TODO: Initialize ioedev
   i2c = esp32s3_i2cbus_initialize(busno);
   if (i2c != NULL)
     {
-      /* Then try to register the gas sensor in one of the two I2C
+      /* Then try to register the drv in one of the two I2C
        * available controllers.
        */
 
-      ret = drv2605l_register(devno, i2c, ioedev);
+      up_mdelay(250);
+      ret = drv2605l_register(devno, i2c, NULL);
       if (ret < 0)
         {
-          snerr("ERROR: Error registering DRV2605L in I2C%d\n", busno);
+          ierr("ERROR: Error registering DRV2605L in I2C%d\n", busno);
         }
     }
   else

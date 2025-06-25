@@ -24,10 +24,10 @@
  * Included Files
  ****************************************************************************/
 
-#include <nuttx/kmalloc.h>
 #include <nuttx/input/ff.h>
-#include <nuttx/ioexpander/ioexpander.h>
-#include <nuttx/ioexpander/gpio.h>
+#include <nuttx/timers/timer.h>
+#include <nuttx/timers/watchdog.h>
+#include <nuttx/lib/lib.h>
 
 #include <nuttx/config.h>
 #include <nuttx/nuttx.h>
@@ -44,27 +44,47 @@
 #include <nuttx/kthread.h>
 #include <nuttx/signal.h>
 #include <nuttx/fs/fs.h>
-
 #include <nuttx/i2c/i2c_master.h>
+
+#ifdef CONFIG_PM
+#define RTC_BSS_ATTR __attribute__((section(".rtc.bss")))
+#else
+#define RTC_BSS_ATTR
+#endif
+
+#define MAGIC_NUMBER (0x41)
 
 #if defined(CONFIG_I2C) && defined(CONFIG_FF_DRV2605L)
 
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+#define FF_DEVNAME_FMT      "/dev/input_ff%d"
+#define FF_DEVNAME_MAX      (32)
+
+#define FF_EVENT_START      (1)
+#define FF_EVENT_STOP       (0)
+
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#define ABS(a) ((a) < 0 ? (-a) : a)
+
 #define DRV2605L_ADDR (0x5A)  /* I2C Slave Address */
 #define DRV2605L_FREQ CONFIG_DRV2605L_I2C_FREQUENCY
 #define DRV2605L_DEVID (0x7)
+#define DRV2605_DEVID (0x3)
 
 /* Register addresses */
 
-#define DRV2605L_STATUS_REG_ADDR (0x0)  /* Device ID, Diag Result, Over Temp, OC Detect */
+#define DRV2605L_STATUS_REG_ADDR (0x0)  /* DevID, Diag Result,
+                                         * OverTemp, OCDetect */
 #define DRV2605L_MODE_REG_ADDR (0x01)   /* Device Reset, Standby, Mode */
 #define DRV2605L_RTP_INPUT_REG_ADDR (0x02)
 
 /* Library and waveform-related registers */
 
 #define DRV2605L_LIB_SEL_REG_ADDR (0x03)
+#define DRV2605L_WAV_FRM_SEQ_BASE_REG_ADDR (0x04)
 #define DRV2605L_WAV_FRM_SEQ1_REG_ADDR (0x04)
 #define DRV2605L_WAV_FRM_SEQ2_REG_ADDR (0x05)
 #define DRV2605L_WAV_FRM_SEQ3_REG_ADDR (0x06)
@@ -77,11 +97,11 @@
 #define DRV2605L_GO_REG_ADDR (0x0C)   /* Bit 1 is GO bit */
 
 #define DRV2605L_ODT_REG_ADDR (0x0D)  /* Overdrive Time Offset */
-#define DRV2605L_SPT_REG_ADDR (0x0E)  /* Sustain Time Offset, Positive Reg*/
-#define DRV2605L_SND_REG_ADDR (0x0F)  /* Sustain Time Offset, Negative Reg*/
+#define DRV2605L_SPT_REG_ADDR (0x0E)  /* Sustain Time Offset, Positive Reg */
+#define DRV2605L_SND_REG_ADDR (0x0F)  /* Sustain Time Offset, Negative Reg */
 #define DRV2605L_BRT_REG_ADDR (0x10)  /* Brake Time Offset */
 
-/* Audio-To-Vibe registers*/
+/* Audio-To-Vibe registers */
 
 #define DRV2605L_ATH_CTRL_REG_ADDR (0x11) /* Control register */
 #define DRV2605L_ATH_MIN_INPUT_REG_ADDR (0x12)
@@ -143,6 +163,8 @@
 #define DRV2605L_OL_LRA_PERIOD_MSK (0x7F)
 #define DRV2605L_GO_BIT_MSK (1)
 
+#define DRV2605L_DATA_FORMAT_RTP_MSK (1 << 3)
+
 /* Result ids */
 
 #define AUTO_CALIB_PASSED (0)
@@ -160,7 +182,7 @@
 /* Standby bit */
 
 #define DEVICE_READY (0)
-#define DEVICE_STANDBY (1)
+#define DEVICE_STANDBY (1 << 6)
 
 /* Modes */
 
@@ -189,11 +211,28 @@
 #define LOOP_GAIN_HIGH (2)
 #define LOOP_GAIN_VERY_HIGH (3)
 
+/* Effect types specific to DRV2605L */
 
+#define DRV2605L_EMPTY_EFFECT (0)
+#define DRV2605L_ROM_EFFECT (1)
+#define DRV2605L_RTP_EFFECT (2)
 
 /****************************************************************************
  * Private Types
  ****************************************************************************/
+
+struct drv2605l_effect_s
+{
+  uint8_t type;               /* ROM / RTP */
+  uint16_t delay;             /* Time to wait before trigger */
+  uint16_t length;            /* Duration of the effect (ms) */
+
+  union
+    {
+      uint8_t rtp_data;
+      uint8_t wav_frm_seq[8]; /* ROM effect */
+    } v;
+};
 
 struct drv2605l_calib_s
 {
@@ -224,72 +263,41 @@ struct drv2605l_calib_s
 
 struct drv2605l_dev_s
 {
-  bool enabled;                         /* Enable/Disable DRV2605L */
   struct ff_lowerhalf_s lower;
   FAR struct i2c_master_s *i2c;
-  FAR struct ioexpander_dev_s *ioedev;
   FAR struct drv2605l_calib_s *calib;
 
-  int en_pin;
-  int int_pin;
-#ifndef CONFIG_DRV2605L_NO_LIBRARY
+// #ifndef CONFIG_DRV2605L_NO_LIBRARY
   uint8_t lib_effect_duration; /* rise + brake time (ms) */
-#endif /* !CONFIG_DRV2605L_NO_LIBRARY */
+// #endif /* !CONFIG_DRV2605L_NO_LIBRARY */
 
   uint16_t max_effects;
+  FAR struct drv2605l_effect_s *effects;
+  FAR struct drv2605l_effect_s *current_effect;
+
+  struct wdog_s wd_timer;
+  struct work_s haptic_work;
+
   mutex_t dev_lock;
-  mutex_t rtp_lock;
+
+  float vbat;
 };
 
 /****************************************************************************
  * Private Function Prototypes
  ****************************************************************************/
 
-
+static void drv2605l_timer_func(wdparm_t arg);
 
 /****************************************************************************
  * Private Data
  ****************************************************************************/
 
+RTC_BSS_ATTR static uint8_t init;
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
-
-/****************************************************************************
- * Name: drv2605l_getregs
- *
- * Description:
- *   Read <length> bytes starting from a DRV2605L register addr
- *
- ****************************************************************************/
-
-static int drv2605l_getregs(FAR struct drv2605l_dev_s *priv, uint8_t regaddr,
-                            uint8_t *rxbuffer, uint8_t length)
-{
-  struct i2c_msg_s msg[2];
-  int ret;
-
-  msg[0].frequency = DRV2605L_FREQ;
-  msg[0].addr = DRV2605L_ADDR;
-  msg[0].flags = 0;
-  msg[0].buffer = &regaddr;
-  msg[0].length = 1;
-
-  msg[1].frequency = DRV2605L_FREQ;
-  msg[1].addr = DRV2605L_ADDR;
-  msg[1].flags = I2C_M_READ;
-  msg[1].buffer = rxbuffer;
-  msg[1].length = length;
-
-  ret = I2C_TRANSFER(priv->i2c, msg, 2);
-  if (ret < 0)
-    {
-      ierr("I2C_TRANSFER failed: %d\n", ret);
-      return -1;
-    }
-
-  return OK;
-}
 
 /****************************************************************************
  * Name: drv2605l_getreg8
@@ -299,7 +307,8 @@ static int drv2605l_getregs(FAR struct drv2605l_dev_s *priv, uint8_t regaddr,
  *
  ****************************************************************************/
 
-static uint8_t drv2605l_getreg8(FAR struct drv2605l_dev_s *priv, uint8_t regaddr)
+static uint8_t drv2605l_getreg8(FAR struct drv2605l_dev_s *priv,
+                                uint8_t regaddr)
 {
   struct i2c_msg_s msg[2];
   uint8_t regval = 0;
@@ -375,12 +384,12 @@ static int drv2605l_checkid(FAR struct drv2605l_dev_s *priv)
   /* Read device ID */
 
   devid = drv2605l_getreg8(priv, DRV2605L_STATUS_REG_ADDR);
-  up_mdelay(1);
+  up_mdelay(10);
   devid >>= 5;
 
   iinfo("devid: 0x%02x\n", devid);
 
-  if (devid != (uint8_t)DRV2605L_DEVID)
+  if (devid != (uint8_t)DRV2605L_DEVID && devid != (uint8_t)DRV2605_DEVID)
     {
       /* ID is not Correct */
 
@@ -542,25 +551,33 @@ static int drv2605l_haptic_upload_effect(FAR struct ff_lowerhalf_s *lower,
 #endif /* !CONFIG_DRV2605L_NO_LIBRARY */
         }
     }
-}
 
-static int drv2605l_haptic_playback(struct ff_lowerhalf_s *lower,
-                                     int effect_id, int val)
-{
-  iinfo("called: effect_id = %d val = %d\n", effect_id, val);
   return OK;
 }
 
 static int drv2605l_haptic_erase(FAR struct ff_lowerhalf_s *lower,
                                   int effect_id)
 {
-  iinfo("called: effect_id = %d\n", effect_id);
+  FAR struct drv2605l_dev_s *priv;
+
+  iinfo("effect_id = %d\n", effect_id);
+
+  priv = container_of(lower, FAR struct drv2605l_dev_s, lower);
+  priv->effects[effect_id].type = DRV2605L_EMPTY_EFFECT;
+
   return OK;
 }
 
 static float drv2605l_get_vbat(FAR struct drv2605l_dev_s *priv)
 {
-  iinfo("called: gain = %d\n", gain);
+  uint8_t regval = 0;
+  regval = drv2605l_getreg8(priv, DRV2605L_VBAT_REG_ADDR);
+
+  priv->vbat = regval * 5.6 / 255.0;
+
+  iinfo("Vdd = %.2f V\n", priv->vbat);
+
+  return priv->vbat;
 }
 
 static void drv2605l_standby_work_routine(FAR void *arg)
@@ -697,13 +714,10 @@ static int drv2605l_haptic_playback(struct ff_lowerhalf_s *lower,
 static int drv2605l_set_loop_mode(FAR struct drv2605l_dev_s *priv)
 {
   int ret = 0;
+  uint8_t regval = 0;
 
-  ret = IOEXP_SETDIRECTION(priv->ioedev, priv->en_pin, IOEXPANDER_DIRECTION_OUT);
-  if (ret < 0)
-    {
-      ierr("ioexpander set direction error: %d\n", ret);
-      return -EIO;
-    }
+  nxmutex_lock(&priv->dev_lock);
+  regval = drv2605l_getreg8(priv, DRV2605L_CTRL3_REG_ADDR);
 
 #ifdef CONFIG_DRV2605L_OPEN_LOOP_MODE
 #ifdef CONFIG_DRV2605L_LRA_ACTUATOR
@@ -744,12 +758,14 @@ static int drv2605l_set_loop_mode(FAR struct drv2605l_dev_s *priv)
   return ret;
 }
 
-static int drv2605l_enable(FAR struct drv2605l_dev_s *priv, bool en)
+static int drv2605l_select_library(FAR struct drv2605l_dev_s *priv)
 {
-  iinfo("enabling drv2605l: %d\n", en);
+  uint8_t regval = 0;
   int ret = 0;
 
-  priv->enabled = en;
+  nxmutex_lock(&priv->dev_lock);
+  regval = drv2605l_getreg8(priv,  DRV2605L_LIB_SEL_REG_ADDR);
+  regval &= ~(DRV2605L_LIB_SEL_MSK);
 
 #ifdef CONFIG_DRV2605L_TS2200_LIBRARY_A
   regval |= 1;
@@ -793,25 +809,25 @@ static int drv2605l_enable(FAR struct drv2605l_dev_s *priv, bool en)
   return ret;
 }
 
-static int drv2605l_set_mode(FAR struct drv2605l_dev_s *priv, uint8_t mode)
+static int drv2605l_auto_calib(FAR struct drv2605l_dev_s *priv,
+                               FAR struct drv2605l_calib_s *calib_data)
 {
-  iinfo("setting drv2605l mode: %d\n", mode);
-  int ret = 0;
-
-
-  return ret;
-}
-
-static int drv2605l_auto_calib(FAR struct drv2605l_dev_s *priv)
-{
-  iinfo("performing auto calibration\n");
-
   int ret = 0;
   uint8_t regval = 0;
-  FAR struct drv2605l_calib_s *calib_data;
 
-  calib_data = kmm_malloc(sizeof(struct drv2605l_calib_s));
-  if (calib_data == NULL)
+  iinfo("performing auto calibration\n");
+
+  uint8_t devid = drv2605l_getreg8(priv, DRV2605L_STATUS_REG_ADDR) >> 5;
+  if (devid == DRV2605_DEVID) {
+    iinfo("Detected DRV2605\n");
+  } else if (devid == DRV2605L_DEVID) {
+    iinfo("Detected DRV2605L\n");
+  } else {
+    ierr("Unknown device ID: %02x\n", devid);
+    return -ENODEV;
+  }
+
+  if (!calib_data)
     {
       /* Populate with default params */
 
@@ -830,8 +846,8 @@ static int drv2605l_auto_calib(FAR struct drv2605l_dev_s *priv)
 
       calib_data->fb_brake_factor = 3;
       calib_data->loop_gain = 1;
-      calib_data->rated_voltage = 0x3e;
-      calib_data->od_clamp = 0x8c;
+      calib_data->rated_voltage = 0x3f;
+      calib_data->od_clamp = 0x89;
       calib_data->auto_cal_time = 2;
       calib_data->drive_time = 0x13;
 
@@ -843,12 +859,23 @@ static int drv2605l_auto_calib(FAR struct drv2605l_dev_s *priv)
 #endif /* CONFIG_DRV2605L_LRA_ACTUATOR */
     }
 
+  /**
+   *  Following a wake-up from Deep Sleep,
+   *  avoid useless re-calibration.
+   */
+  if (init == MAGIC_NUMBER)
+    {
+      return OK;
+    }
+
+  nxmutex_lock(&priv->dev_lock);
   priv->calib = calib_data;
 
   /* Place device in auto calibration mode */
 
+  drv2605l_putreg8(priv, DRV2605L_MODE_REG_ADDR, MODE_AUTO_CALIB);
 
-  /* Populate input to auto calibration */
+  /* Write auto calib params */
 
   regval = drv2605l_getreg8(priv, DRV2605L_FEEDBACK_CTRL_REG_ADDR);
   regval &= DRV2605L_BEMF_GAIN_MSK;
@@ -885,36 +912,54 @@ static int drv2605l_auto_calib(FAR struct drv2605l_dev_s *priv)
   regval = drv2605l_getreg8(priv, DRV2605L_CTRL5_REG_ADDR);
   regval &= ~(0xf);
   regval |= ((priv->calib->blanking_time & 0xc) |
-            ((priv->calib->idiss_time >> 2) 0x3));
+            ((priv->calib->idiss_time >> 2) & 0x3));
 
   drv2605l_putreg8(priv, DRV2605L_CTRL5_REG_ADDR, regval);
 #endif /* CONFIG_DRV2605L_LRA_ACTUATOR */
 
   /* Trigger auto calibration */
 
+  ret = drv2605l_putreg8(priv, DRV2605L_GO_REG_ADDR, 0x01);
+
+  do
+    {
+      usleep(3000);
+      regval = drv2605l_getreg8(priv, DRV2605L_GO_REG_ADDR);
+    }
+  while (regval > 0);
+
+  regval = drv2605l_getreg8(priv, DRV2605L_STATUS_REG_ADDR);
 
   /* Store result if calibration was successful */
 
+  if (regval & DRV2605L_DIAG_RESULT_MSK)
+    {
+      ierr("Auto calibration failed\n");
+      nxmutex_unlock(&priv->dev_lock);
+      return -EINVAL;
+    }
+
+  regval = drv2605l_getreg8(priv, DRV2605L_FEEDBACK_CTRL_REG_ADDR);
+  priv->calib->bemf_gain = regval & 3;
+  priv->calib->a_cal_comp = drv2605l_getreg8(priv,
+                                             DRV2605L_A_CAL_COMP_REG_ADDR);
+  priv->calib->a_cal_bemf = drv2605l_getreg8(priv,
+                                             DRV2605L_A_CAL_BEMF_REG_ADDR);
+
+  regval = drv2605l_getreg8(priv, DRV2605L_STATUS_REG_ADDR);
+  priv->calib->diag_result = (regval & DRV2605L_DIAG_RESULT_MSK) >> 3;
+
+  nxmutex_unlock(&priv->dev_lock);
+
+  init = MAGIC_NUMBER;
 
   return ret;
 }
 
-static int drv2605l_init(FAR struct drv2605l_dev_s *priv)
+static int drv2605l_init(FAR struct drv2605l_dev_s *priv,
+                         FAR struct drv2605l_calib_s *calib_data)
 {
   int ret = 0;
-
-  /* Init EN and IN/TRIG pins */
-
-  drv2605l_pin_init(priv);
-
-  usleep(250);
-
-  ret = drv2605l_enable(priv, true);
-
-  if (ret < 0)
-    {
-      return ret;
-    }
 
   ret = drv2605l_checkid(priv);
 
@@ -923,7 +968,19 @@ static int drv2605l_init(FAR struct drv2605l_dev_s *priv)
       return ret;
     }
 
-  ret = drv2605l_auto_calib(priv);
+  /* Put device in desired mode (Open-Loop, Closed-Loop) */
+
+  ret = drv2605l_set_loop_mode(priv);
+
+  if (ret < 0)
+    {
+      ierr("set loop mode failed\n");
+      return ret;
+    }
+
+  /* Start auto calibration */
+
+  ret = drv2605l_auto_calib(priv, calib_data);
 
   if (ret < 0)
     {
@@ -931,101 +988,113 @@ static int drv2605l_init(FAR struct drv2605l_dev_s *priv)
       return ret;
     }
 
+  priv->vbat = drv2605l_get_vbat(priv);
+
+  if (priv->vbat < 2)
+    {
+      ierr("Vdd is too low: %.2f V\n", priv->vbat);
+      return ret;
+    }
+
   /* Select ROM library */
 
-  /* Put device in desired mode (Open-Loop, Closed-Loop) */
+  ret = drv2605l_select_library(priv);
 
-  /* Standby / Deassert EN */
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  /* Standby and switch to internal trigger */
+
+  ret = drv2605l_putreg8(priv, DRV2605L_MODE_REG_ADDR, DEVICE_STANDBY);
 
   return ret;
 }
-
 
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
 
 int drv2605l_register(int devno, FAR struct i2c_master_s *i2c,
-                      FAR struct ioexpander_dev_s *ioedev)
+                      FAR struct drv2605l_calib_s *calib_data)
 {
   FAR struct drv2605l_dev_s *priv;
-  FAR struct ff_lowerhalf_s *lower;
+  char devpath[FF_DEVNAME_MAX];
   int ret = 0;
 
-  DEBUGASSERT(i2c != NULL && ioedev != NULL);
+  DEBUGASSERT(i2c != NULL);
 
   /* Initialize the drv2605l dev structure */
 
-  priv = kmm_malloc(sizeof(struct drv2605l_dev_s));
-  if (priv == NULL)
+  priv = kmm_zalloc(sizeof(struct drv2605l_dev_s));
+  if (!priv)
     {
       ierr("Failed to allocate drv2605l_dev_s instance\n");
       return -ENOMEM;
     }
 
-  lower = kmm_malloc(sizeof(struct ff_lowerhalf_s));
-  if (lower == NULL)
+  /* Init upper */
+
+  priv->max_effects = FF_MAX_EFFECTS;
+  priv->i2c = i2c;
+
+  nxmutex_init(&priv->dev_lock);
+
+  priv->effects = kmm_zalloc(priv->max_effects * sizeof(*priv->effects));
+
+  if (!priv->effects)
     {
-      ierr("Failed to allocate ff_lowerhalf_s instance\n");
+      ierr("Failed to allocate effects array\n");
       kmm_free(priv);
       return -ENOMEM;
     }
 
-  /* Init upper */
-
-  priv->max_effects = 256; // TODO
-  priv->i2c = i2c;
-  priv->ioedev = ioedev;
-  priv->en_pin = CONFIG_DRV2605L_EN_PIN;
-  priv->int_pin = CONFIG_DRV2605L_IN_TRIG_PIN;
-
-  // nxmutex_init(&priv->dev_lock);
-
   /* Init lowerhalf */
 
-  lower                  = &priv->lower;
-  lower->upload          = drv2605l_haptic_upload_effect;
-  lower->erase           = drv2605l_haptic_erase;
-  lower->playback        = drv2605l_haptic_playback;
-  lower->set_gain        = drv2605l_haptic_set_gain;
-  lower->set_autocenter  = NULL;
-  lower->destroy         = NULL;
+  priv->lower.upload          = drv2605l_haptic_upload_effect;
+  priv->lower.erase           = drv2605l_haptic_erase;
+  priv->lower.playback        = drv2605l_haptic_playback;
+  priv->lower.set_gain        = NULL;
+  priv->lower.set_autocenter  = NULL;
+  priv->lower.destroy         = NULL;
 
   /* Set up capabilities */
 
-  set_bit(FF_CUSTOM, lower->ffbit);
-  set_bit(FF_GAIN, lower->ffbit);
-  set_bit(FF_CONSTANT, lower->ffbit);
-  set_bit(FF_PERIODIC, lower->ffbit);
+  set_bit(FF_CUSTOM, priv->lower.ffbit);
+  set_bit(FF_CONSTANT, priv->lower.ffbit);
+  set_bit(FF_PERIODIC, priv->lower.ffbit);
 
   /* Init device */
-
-  ret = drv2605l_init(priv);
+  ret = drv2605l_init(priv, calib_data);
 
   if (ret < 0)
     {
-      goto err;
+      goto errout;
     }
 
   /* Register driver */
 
-  char *devpath = "/dev/input_ff0";
+  snprintf(devpath, FF_DEVNAME_MAX, FF_DEVNAME_FMT, devno);
 
-  ret = ff_register(lower, devpath, priv->max_effects);
+  ret = ff_register(&priv->lower, devpath, priv->max_effects);
   if (ret < 0)
     {
       ierr("Failed to register driver: %d\n", ret);
-      goto err;
+      goto errout;
     }
 
   iinfo("drv2605l registered at %s\n", devpath);
+
   return OK;
 
-err:
-  /* Free memory, unregister stuff */
+errout:
 
+  /* Free memory */
+
+  nxmutex_destroy(&priv->dev_lock);
+  kmm_free(priv->effects);
   kmm_free(priv);
-  kmm_free(lower);
   return ret;
 }
 

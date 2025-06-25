@@ -127,5 +127,20 @@ int board_spiflash_init(void);
 int board_i2c_init(void);
 #endif
 
+/****************************************************************************
+ * Name: board_drv2605l_initialize
+ *
+ * Description:
+ *   Configure and register the DRV2605L driver.
+ *
+ * Returned Value:
+ *   Zero (OK) is returned on success; A negated errno value is returned
+ *   to indicate the nature of any failure.
+ *
+ ****************************************************************************/
+#ifdef CONFIG_FF_DRV2605L
+int board_drv2605l_initialize(int devno, int busno);
+#endif
+
 #endif /* __ASSEMBLY__ */
 #endif /* __BOARDS_XTENSA_ESP32S3_HACKTORWATCH_SRC_HACKTORWATCH_H */

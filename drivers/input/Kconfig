@@ -84,7 +84,7 @@ config DRV2605L_IN_TRIG_PIN
 
 choice
 	prompt "DRV2605L Actuator"
-	default LRA_ACTUATOR
+	default DRV2605L_ERM_ACTUATOR
 
 config DRV2605L_LRA_ACTUATOR
 	bool "LRA Actuator"
@@ -100,53 +100,53 @@ endchoice # DRV2605L Actuator
 
 choice
 	prompt "DRV2605L Mode"
-	default CLOSED_LOOP_UNIDIR_MODE
+	default DRV2605L_OPEN_LOOP_MODE
+
+config DRV2605L_OPEN_LOOP_MODE
+	bool "Open Loop Mode"
 
 config DRV2605L_CLOSED_LOOP_UNIDIR_MODE
 	bool "Closed Loop Unidirectional Mode"
-	---help---
 
 config DRV2605L_CLOSED_LOOP_BIDIR_MODE
 	bool "Closed Loop Bidirectional Mode"
-	---help---
-
-config OPEN_LOOP_MODE
-	bool "Open Loop Mode"
-	---help---
 
 endchoice # DRV2605L Mode
 
 choice
 	prompt "DRV2605L ROM Library"
-	default EMPTY
+	default DRV2605L_NO_LIBRARY
 
-config EMPTY
+config DRV2605L_NO_LIBRARY
 	bool "No ROM library used"
-	---help---
 
 config DRV2605L_TS2200_LIBRARY_A
 	bool "TS2200_LIBRARY_A"
-	depends on ERM_ACTUATOR
+	depends on DRV2605L_ERM_ACTUATOR && DRV2605L_OPEN_LOOP_MODE
 
 config DRV2605L_TS2200_LIBRARY_B
 	bool "TS2200_LIBRARY_B"
-	depends on ERM_ACTUATOR
+	depends on DRV2605L_ERM_ACTUATOR && !DRV2605L_CLOSED_LOOP_UNIDIR_MODE
 
 config DRV2605L_TS2200_LIBRARY_C
 	bool "TS2200_LIBRARY_C"
-	depends on ERM_ACTUATOR
+	depends on DRV2605L_ERM_ACTUATOR && !DRV2605L_CLOSED_LOOP_UNIDIR_MODE
 
 config DRV2605L_TS2200_LIBRARY_D
 	bool "TS2200_LIBRARY_D"
-	depends on ERM_ACTUATOR
+	depends on DRV2605L_ERM_ACTUATOR && !DRV2605L_CLOSED_LOOP_UNIDIR_MODE
 
 config DRV2605L_TS2200_LIBRARY_E
 	bool "TS2200_LIBRARY_E"
-	depends on LRA_ACTUATOR
+	depends on DRV2605L_LRA_ACTUATOR && !DRV2605L_CLOSED_LOOP_UNIDIR_MODE
 
 config DRV2605L_TS2200_LIBRARY_F
 	bool "TS2200_LIBRARY_F"
-	depends on ERM_ACTUATOR
+	depends on DRV2605L_ERM_ACTUATOR && !DRV2605L_CLOSED_LOOP_UNIDIR_MODE
+
+config DRV2605L_LRA_LIBRARY
+	bool "LRA_LIBRARY"
+	depends on DRV2605L_LRA_ACTUATOR
 
 endchoice # DRV2605L ROM Library
 
@@ -655,20 +655,6 @@ config INPUT_CYPRESS_MBR3108_NPOLLWAITERS
 		Maximum number of threads that can be waiting on poll()
 
 endif # INPUT_CYPRESS_MBR3108
-
-config INPUT_CST816S
-	bool "Hynitron CST816S Driver"
-	default n
-	select INPUT_TOUCHSCREEN
-	---help---
-		Enable support for CST816S Touch Controller.
-
-config CST816S_INT_PIN
-    int "CST816S interrupt GPIO pin number"
-    default 1
-    depends on INPUT_CST816S
-    ---help---
-        The GPIO pin number used for the CST816S interrupt line.
 
 config INPUT_GT9XX
 	bool "Goodix GT9xx Driver"

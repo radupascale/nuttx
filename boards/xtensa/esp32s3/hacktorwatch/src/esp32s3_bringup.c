@@ -131,7 +131,6 @@
 int esp32s3_bringup(void)
 {
   int ret;
-
 #if defined(CONFIG_ESP32S3_SPI) && defined(CONFIG_SPI_DRIVER)
   #ifdef CONFIG_ESP32S3_SPI2
   ret = board_spidev_initialize(ESP32S3_SPI2);
@@ -343,6 +342,7 @@ int esp32s3_bringup(void)
 #endif
 
 #ifdef CONFIG_FF_DRV2605L
+  syslog(LOG_ERR, "Registering driver\n");
   ret = board_drv2605l_initialize(0, 0);
   if (ret < 0)
     {
