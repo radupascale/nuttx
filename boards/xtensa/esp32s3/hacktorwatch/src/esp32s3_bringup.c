@@ -84,11 +84,10 @@
 #ifndef CONFIG_ESP32S3_GPIO_IRQ
 #  error "The CST816S driver requires ESP32S3_GPIO_IRQ in the config"
 #endif
+#endif
 
 #ifdef CONFIG_SENSORS_LSM6DSL
 #include <nuttx/sensors/lsm6dsl.h>
-#endif
-
 #endif
 
 #ifdef CONFIG_ESP32S3_PARTITION_TABLE
