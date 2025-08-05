@@ -656,6 +656,20 @@ config INPUT_CYPRESS_MBR3108_NPOLLWAITERS
 
 endif # INPUT_CYPRESS_MBR3108
 
+config INPUT_CST816S
+	bool "Hynitron CST816S Driver"
+	default n
+	select INPUT_TOUCHSCREEN
+	---help---
+		Enable support for CST816S Touch Controller.
+
+config CST816S_INT_PIN
+    int "CST816S interrupt GPIO pin number"
+    default 1
+    depends on INPUT_CST816S
+    ---help---
+        The GPIO pin number used for the CST816S interrupt line.
+
 config INPUT_GT9XX
 	bool "Goodix GT9xx Driver"
 	default n
