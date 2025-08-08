@@ -703,6 +703,11 @@ static int drv2605l_haptic_playback(struct ff_lowerhalf_s *lower,
   if (val == FF_EVENT_STOP)
     {
       nxmutex_unlock(&priv->dev_lock);
+
+      /* Actively stop motor */
+      drv2605l_putreg8(priv, DRV2605L_GO_REG_ADDR, 0x00);
+      drv2605l_putreg8(priv, DRV2605L_MODE_REG_ADDR, DEVICE_STANDBY);
+
       work_cancel(HPWORK, &priv->haptic_work);
       return OK;
     }
